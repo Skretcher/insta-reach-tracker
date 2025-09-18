@@ -44,14 +44,14 @@
       [
         "react-native-fbsdk-next",
         {
-          "appID": "1219279183336078",
-          "displayName": "insta-reach-tracker"
+          "appID": "1112015731097833",
+          "displayName": "instareachtracker-IG"
         }
       ]
     ],
     "experiments": {
       "reactCompiler": true
-    },
+    }
    
   }
 }

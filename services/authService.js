@@ -1,34 +1,32 @@
-// services/AuthService.js
-import * as SecureStore from "expo-secure-store";
+// services/authService.js
+// Minimal token persistence using AsyncStorage for dev.
+// Replace with SecureStore / backend in production.
 
-const TOKEN_KEY = "instagram_access_token";
-const TOKEN_EXPIRES_AT = "instagram_token_expires_at";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+const KEY_TOKEN = "ig_access_token";
 
 export const AuthService = {
-  async saveToken(token, expiresInSeconds = null) {
-    await SecureStore.setItemAsync(TOKEN_KEY, token);
-    if (expiresInSeconds) {
-      const expiresAt = Date.now() + expiresInSeconds * 1000;
-      await SecureStore.setItemAsync(TOKEN_EXPIRES_AT, String(expiresAt));
-    } else {
-      await SecureStore.deleteItemAsync(TOKEN_EXPIRES_AT);
+  async saveToken(token) {
+    try {
+      await AsyncStorage.setItem(KEY_TOKEN, token);
+    } catch (e) {
+      console.warn("AuthService.saveToken failed", e);
     }
   },
-
   async getToken() {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY);
-    const expiresAt = await SecureStore.getItemAsync(TOKEN_EXPIRES_AT);
-    if (!token) return null;
-    if (expiresAt && Date.now() > Number(expiresAt)) {
-      // token expired
-      await this.clearToken();
+    try {
+      return await AsyncStorage.getItem(KEY_TOKEN);
+    } catch (e) {
+      console.warn("AuthService.getToken failed", e);
       return null;
     }
-    return token;
   },
-
   async clearToken() {
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-    await SecureStore.deleteItemAsync(TOKEN_EXPIRES_AT);
+    try {
+      await AsyncStorage.removeItem(KEY_TOKEN);
+    } catch (e) {
+      console.warn("AuthService.clearToken failed", e);
+    }
   },
 };

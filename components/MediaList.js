@@ -1,3 +1,4 @@
+// components/MediaList.js
 import { FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 export default function MediaList({ media, onSelect }) {
@@ -8,21 +9,32 @@ export default function MediaList({ media, onSelect }) {
   const renderItem = ({ item }) => (
     <TouchableOpacity onPress={() => onSelect?.(item)}>
       <View style={styles.card}>
-        {item.media_url && item.media_type === "IMAGE" && (
-          <Image source={{ uri: item.media_url }} style={styles.image} />
+        {item.media_type === "IMAGE" && item.media_url && (
+          <Image source={{ uri: item.media_url }} style={styles.media} />
         )}
-        <Text style={styles.caption}>{item.caption || "No caption"}</Text>
+
+        {item.media_type === "VIDEO" && item.media_url && (
+          <View style={[styles.media, styles.videoPlaceholder]}>
+            <Text style={styles.videoText}>🎥 Video</Text>
+          </View>
+        )}
+
+        <Text style={styles.caption} numberOfLines={2} ellipsizeMode="tail">
+          {item.caption || "No caption"}
+        </Text>
+
         <View style={styles.metrics}>
-          <Text>Reach: {item.insights?.reach ?? "-"}</Text>
-          <Text>Impressions: {item.insights?.impressions ?? "-"}</Text>
-          <Text>Engagement: {item.insights?.engagement ?? "-"}</Text>
-          <Text>Shares: {item.insights?.shares ?? "-"}</Text>
+          <Text style={styles.metric}>❤️ {item.like_count ?? "-"}</Text>
+          <Text style={styles.metric}>💬 {item.comments_count ?? "-"}</Text>
+          <Text style={styles.metric}>📈 {item.insights?.reach ?? "-"}</Text>
+          <Text style={styles.metric}>👁️ {item.insights?.impressions ?? "-"}</Text>
+          <Text style={styles.metric}>🔖 {item.insights?.saved ?? "-"}</Text>
         </View>
       </View>
     </TouchableOpacity>
   );
 
-  return <FlatList data={media} keyExtractor={(i) => i.id} renderItem={renderItem} />;
+  return <FlatList data={media} keyExtractor={(i) => String(i.id)} renderItem={renderItem} />;
 }
 
 const styles = StyleSheet.create({
@@ -36,11 +48,22 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
-  image: {
+  media: {
     width: "100%",
     height: 200,
     borderRadius: 8,
     marginBottom: 10,
+    backgroundColor: "#f0f0f0",
+  },
+  videoPlaceholder: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#000",
+  },
+  videoText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "bold",
   },
   caption: {
     fontWeight: "bold",
@@ -50,7 +73,12 @@ const styles = StyleSheet.create({
   metrics: {
     marginTop: 5,
     flexDirection: "row",
-    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  metric: {
+    fontSize: 12,
+    color: "#555",
   },
   noMedia: {
     textAlign: "center",

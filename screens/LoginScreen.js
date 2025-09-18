@@ -1,43 +1,35 @@
 // screens/LoginScreen.js
-import axios from "axios";
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import LoginButton from "../components/LoginButton";
 
 export default function LoginScreen({ setAccessToken, setMedia }) {
-  const handleLogin = async (token) => {
+  // Facebook login handler (legacy — keep if you still use it)
+  const handleFacebookLogin = async (token) => {
     setAccessToken(token);
+    // ...existing Facebook logic (optional)
+  };
 
-    // Optional: fetch media immediately
-    try {
-      const pagesRes = await axios.get(
-        `https://graph.facebook.com/me/accounts?access_token=${token}`
-      );
-      const pageId = pagesRes.data.data[0]?.id;
-      if (!pageId) return;
-
-      const igRes = await axios.get(
-        `https://graph.facebook.com/${pageId}?fields=instagram_business_account&access_token=${token}`
-      );
-      const igUserId = igRes.data.instagram_business_account?.id;
-      if (!igUserId) return;
-
-      const mediaRes = await axios.get(
-        `https://graph.facebook.com/${igUserId}/media?fields=id,caption,media_type,media_url,timestamp&access_token=${token}`
-      );
-
-      setMedia(mediaRes.data.data.slice(0, 5)); // save first 5 posts
-    } catch (err) {
-      console.error(err);
-    }
+  // Instagram login handler (called after successful login in LoginButton)
+  const handleInstagramLogin = async (token) => {
+    setAccessToken(token);
+    // Optionally, fetch Instagram user media directly here if needed
+    // e.g. call your ApiService to populate setMedia(...)
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.card}>
         <Text style={styles.title}>Instagram Reach Tracker</Text>
-        <Text style={styles.subtitle}>Connect your Facebook account to analyze your Instagram insights</Text>
-        <LoginButton onLogin={handleLogin} />
-        <TouchableOpacity onPress={() => Linking.openURL('https://www.facebook.com/login/identify/')}>
+        <Text style={styles.subtitle}>
+          Connect your account to analyze your Instagram insights
+        </Text>
+
+        {/* Single Instagram login button (use the component in components/LoginButton) */}
+        <LoginButton onLogin={handleInstagramLogin} />
+
+        <TouchableOpacity
+          onPress={() => Linking.openURL("https://www.facebook.com/login/identify/")}
+        >
           <Text style={styles.forgotPassword}>Forgot Password?</Text>
         </TouchableOpacity>
       </View>
@@ -53,8 +45,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f5f5",
   },
   card: {
-    backgroundColor: "white",
-    padding: 30,
+    backgroundColor: "#fff",
+    padding: 20,
     borderRadius: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
