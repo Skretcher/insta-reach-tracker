@@ -1,40 +1,102 @@
 // components/MediaList.js
-import { FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  FlatList,
+  Image,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+
+function fmtNumber(n) {
+  if (n == null || Number.isNaN(Number(n))) return "-";
+  try {
+    return Number(n).toLocaleString();
+  } catch {
+    return String(n);
+  }
+}
 
 export default function MediaList({ media, onSelect }) {
   if (!media || media.length === 0) {
     return <Text style={styles.noMedia}>No media found</Text>;
   }
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity onPress={() => onSelect?.(item)}>
-      <View style={styles.card}>
-        {item.media_type === "IMAGE" && item.media_url && (
-          <Image source={{ uri: item.media_url }} style={styles.media} />
-        )}
+  const renderItem = ({ item }) => {
+    const isVideo = item.media_type === "VIDEO";
+    const isImage = item.media_type === "IMAGE";
+    const isCarousel = item.media_type === "CAROUSEL_ALBUM";
 
-        {item.media_type === "VIDEO" && item.media_url && (
-          <View style={[styles.media, styles.videoPlaceholder]}>
-            <Text style={styles.videoText}>🎥 Video</Text>
+    return (
+      <TouchableOpacity onPress={() => onSelect?.(item)}>
+        <View style={styles.card}>
+          {/* Media preview */}
+          {isImage && item.media_url && (
+            <Image source={{ uri: item.media_url }} style={styles.media} />
+          )}
+
+          {isVideo && (
+            <View style={[styles.media, styles.videoPlaceholder]}>
+              {item.media_url ? (
+                <Image source={{ uri: item.media_url }} style={styles.media} />
+              ) : null}
+              <View style={styles.overlay}>
+                <Text style={styles.overlayText}>🎥 Video</Text>
+              </View>
+            </View>
+          )}
+
+          {isCarousel && item.media_url && (
+            <View style={[styles.media, styles.carouselPlaceholder]}>
+              <Image source={{ uri: item.media_url }} style={styles.media} />
+              <View style={styles.overlay}>
+                <Text style={styles.overlayText}>📸 Carousel</Text>
+              </View>
+            </View>
+          )}
+
+          {!item.media_url && (
+            <View style={[styles.media, styles.fallback]}>
+              <Text style={{ color: "#666" }}>No media</Text>
+            </View>
+          )}
+
+          {/* Caption */}
+          <Text style={styles.caption} numberOfLines={2} ellipsizeMode="tail">
+            {item.caption || "No caption"}
+          </Text>
+
+          {/* Timestamp */}
+          {item.timestamp && (
+            <Text style={styles.timestamp}>
+              {new Date(item.timestamp).toLocaleDateString()}
+            </Text>
+          )}
+
+          {/* Metrics */}
+          <View style={styles.metrics}>
+            <Text style={styles.metric}>❤️ {fmtNumber(item.like_count)}</Text>
+            <Text style={styles.metric}>💬 {fmtNumber(item.comments_count)}</Text>
+            <Text style={styles.metric}>
+              📈 {fmtNumber(item.insights?.reach)}
+            </Text>
+            <Text style={styles.metric}>
+              👁️ {fmtNumber(item.insights?.impressions)}
+            </Text>
+            <Text style={styles.metric}>🔖 {fmtNumber(item.insights?.saved)}</Text>
           </View>
-        )}
-
-        <Text style={styles.caption} numberOfLines={2} ellipsizeMode="tail">
-          {item.caption || "No caption"}
-        </Text>
-
-        <View style={styles.metrics}>
-          <Text style={styles.metric}>❤️ {item.like_count ?? "-"}</Text>
-          <Text style={styles.metric}>💬 {item.comments_count ?? "-"}</Text>
-          <Text style={styles.metric}>📈 {item.insights?.reach ?? "-"}</Text>
-          <Text style={styles.metric}>👁️ {item.insights?.impressions ?? "-"}</Text>
-          <Text style={styles.metric}>🔖 {item.insights?.saved ?? "-"}</Text>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
-  return <FlatList data={media} keyExtractor={(i) => String(i.id)} renderItem={renderItem} />;
+  return (
+    <FlatList
+      data={media}
+      keyExtractor={(i) => String(i.id)}
+      renderItem={renderItem}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -56,19 +118,38 @@ const styles = StyleSheet.create({
     backgroundColor: "#f0f0f0",
   },
   videoPlaceholder: {
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#000",
+    position: "relative",
+    overflow: "hidden",
   },
-  videoText: {
+  carouselPlaceholder: {
+    position: "relative",
+    overflow: "hidden",
+  },
+  overlay: {
+    position: "absolute",
+    top: "40%",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  overlayText: {
+    backgroundColor: "rgba(0,0,0,0.6)",
     color: "#fff",
-    fontSize: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    fontSize: 14,
     fontWeight: "bold",
   },
   caption: {
     fontWeight: "bold",
     marginBottom: 5,
     color: "#333",
+  },
+  timestamp: {
+    fontSize: 12,
+    color: "#777",
+    marginBottom: 6,
   },
   metrics: {
     marginTop: 5,
@@ -79,6 +160,11 @@ const styles = StyleSheet.create({
   metric: {
     fontSize: 12,
     color: "#555",
+    marginRight: 8,
+  },
+  fallback: {
+    justifyContent: "center",
+    alignItems: "center",
   },
   noMedia: {
     textAlign: "center",

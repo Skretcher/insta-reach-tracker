@@ -1,46 +1,64 @@
 // services/apiService.js
-// Helper layer for Instagram Graph / Facebook Graph calls.
+// Helper layer for Instagram Graph calls using Instagram-scoped tokens.
+// Works with Instagram Business Login (Option A).
 
-const GRAPH_BASE = "https://graph.facebook.com/v20.0"; // pin to version
+const GRAPH_BASE = "https://graph.instagram.com";
 
 async function fetchJson(url) {
   const res = await fetch(url);
-  const json = await res.json();
+  // try to parse JSON even on non-2xx to surface helpful errors
+  let json;
+  try {
+    json = await res.json();
+  } catch (e) {
+    throw new Error(`Invalid JSON response from ${url}: ${e.message}`);
+  }
   if (!json) throw new Error(`Empty response from ${url}`);
   if (json.error) {
-    const { message, code, type, fbtrace_id } = json.error;
-    throw new Error(
-      `Graph API error on ${url}: ${message} (code ${code}, type ${type}, trace ${fbtrace_id})`
-    );
+    const { message, code, type } = json.error;
+    throw new Error(`Graph API error on ${url}: ${message} (code ${code}, type ${type})`);
   }
   return json;
 }
 
 /**
- * GET /me/accounts — list of FB pages user has access to
+ * GET /me — get basic IG user info
+ * Example fields: id, username, account_type
  */
-export async function getPages(accessToken) {
-  const url = `${GRAPH_BASE}/me/accounts?access_token=${encodeURIComponent(accessToken)}`;
+export async function getUserProfile(accessToken) {
+  const fields = ["id", "username", "account_type"].join(",");
+  const url = `${GRAPH_BASE}/me?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(accessToken)}`;
   return fetchJson(url);
 }
 
 /**
- * GET /{pageId}?fields=instagram_business_account
- * Returns IG Business account ID linked to FB Page
+ * Paginated media fetch helper.
+ * If afterUrl is provided, it will fetch that exact URL (returned previously in `next`).
+ * Otherwise it requests /me/media with the given limit.
+ *
+ * Returns: { data: Array, next: string | null }
  */
-export async function getIgUserIdFromPage(pageId, accessToken) {
-  const url = `${GRAPH_BASE}/${pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(accessToken)}`;
+export async function getMediaPage(accessToken, limit = 20, afterUrl = null) {
+  let url = afterUrl;
+  if (!url) {
+    const fields = ["id", "caption", "media_type", "media_url", "permalink", "timestamp"].join(",");
+    url = `${GRAPH_BASE}/me/media?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(accessToken)}`;
+  }
+
   const json = await fetchJson(url);
-  return json.instagram_business_account?.id ?? null;
+  const data = json.data || [];
+  const next = json.paging?.next || null;
+  return { data, next };
 }
 
 /**
- * GET /{igUserId}/media — list of IG posts
- * If fetchAll=true, follows paging until exhausted.
+ * Convenience: get all media (non-paged)
+ * Existing code sometimes expects either an array or an object with data.
+ * This returns an array (first page only unless fetchAll true).
  */
-export async function getMedia(igUserId, accessToken, limit = 25, fetchAll = false) {
+export async function getMedia(accessToken, limit = 25, fetchAll = false) {
   const fields = ["id", "caption", "media_type", "media_url", "permalink", "timestamp"].join(",");
-  let url = `${GRAPH_BASE}/${igUserId}/media?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(accessToken)}`;
+  let url = `${GRAPH_BASE}/me/media?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(accessToken)}`;
   let allData = [];
 
   while (url) {
@@ -56,7 +74,7 @@ export async function getMedia(igUserId, accessToken, limit = 25, fetchAll = fal
 }
 
 /**
- * GET /{nodeId}?fields=field1,field2
+ * GET /{nodeId}?fields=...
  * Can fetch for IG user or media node.
  */
 export async function getMediaFields(nodeId, accessToken, fields = []) {
@@ -66,19 +84,11 @@ export async function getMediaFields(nodeId, accessToken, fields = []) {
 }
 
 /**
- * GET /{mediaId}/insights?metric=impressions,reach
+ * GET /{mediaId}/insights?metric=...
+ * Fetch insights for a media node. Metrics depend on media type and account type.
  */
 export async function getMediaInsights(mediaId, accessToken, metrics = []) {
   const metricStr = Array.isArray(metrics) ? metrics.join(",") : metrics;
   const url = `${GRAPH_BASE}/${mediaId}/insights?metric=${encodeURIComponent(metricStr)}&access_token=${encodeURIComponent(accessToken)}`;
   return fetchJson(url);
-}
-
-/**
- * GET /{igUserId}?fields=username
- * Convenience helper for username.
- */
-export async function getIgUsername(igUserId, accessToken) {
-  const json = await getMediaFields(igUserId, accessToken, ["username"]);
-  return json.username || null;
 }

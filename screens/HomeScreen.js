@@ -19,7 +19,10 @@ export default function HomeScreen({ navigation }) {
   const { accessToken, setAccessToken, media, setMedia } = useApp();
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [username, setUsername] = useState("");
+  const [nextPageUrl, setNextPageUrl] = useState(null);
+  const PAGE_SIZE = 20;
 
   // Redirect to login if no token
   useEffect(() => {
@@ -47,7 +50,50 @@ export default function HomeScreen({ navigation }) {
     [media, search]
   );
 
-  // Fetch username and media
+  // Helper: Enrich a single post (insights + fields)
+  const enrichPost = async (post, token) => {
+    let enriched = { ...post };
+    try {
+      const insightsRes = await ApiService.getMediaInsights(post.id, token, [
+        "impressions",
+        "reach",
+        "engagement",
+        "saved",
+      ]);
+      const insightsObj = {};
+      (insightsRes?.data ?? []).forEach((m) => {
+        insightsObj[m.name] = m.values?.[0]?.value ?? 0;
+      });
+      enriched.insights = insightsObj;
+    } catch {
+      enriched.insights = enriched.insights ?? {};
+    }
+
+    if (enriched.like_count == null || enriched.comments_count == null) {
+      try {
+        const mediaFieldsRes = await ApiService.getMediaFields(
+          post.id,
+          token,
+          [
+            "like_count",
+            "comments_count",
+            "permalink",
+            "media_url",
+            "media_type",
+            "caption",
+            "timestamp",
+          ]
+        );
+        enriched = { ...enriched, ...mediaFieldsRes };
+      } catch {}
+    }
+
+    enriched.like_count = Number(enriched.like_count ?? 0);
+    enriched.comments_count = Number(enriched.comments_count ?? 0);
+    return enriched;
+  };
+
+  // Fetch username and first page of media
   const handleRefresh = async () => {
     if (!accessToken) {
       Alert.alert("Error", "No access token found.");
@@ -55,76 +101,41 @@ export default function HomeScreen({ navigation }) {
     }
 
     setLoading(true);
+    setNextPageUrl(null);
     try {
-      // Get Facebook pages linked to account
-      const pagesRes = await ApiService.getPages(accessToken);
-      const pages = pagesRes?.data ?? [];
-      if (!pages.length) throw new Error("No Facebook Pages linked to your account.");
-
-      const pageId = pages[0].id;
-
-      // Get Instagram Business Account ID
-      const igUserId = await ApiService.getIgUserIdFromPage(pageId, accessToken);
-      if (!igUserId) throw new Error("No Instagram Business Account linked to this page.");
-
-      // Fetch username once
+      // Profile
       try {
-        const userRes = await ApiService.getMediaFields(igUserId, accessToken, ["username"]);
-        setUsername(userRes.username || "");
+        const user = await ApiService.getUserProfile(accessToken);
+        setUsername(user.username || "");
       } catch {
         setUsername("");
       }
 
-      // Fetch media
-      const mediaRes = await ApiService.getMedia(igUserId, accessToken, 50);
-      const posts = mediaRes?.data ?? [];
+      // Try to use paged endpoint if available
+      if (typeof ApiService.getMediaPage === "function") {
+        // getMediaPage should return { data, next }
+        const page = await ApiService.getMediaPage(accessToken, PAGE_SIZE);
+        const rawPosts = page.data || [];
+        setNextPageUrl(page.next || null);
 
-      // Fetch insights and enrich posts
-      const postsWithInsights = await Promise.all(
-        posts.map(async (post) => {
-          let enriched = { ...post };
+        // Enrich page posts
+        const postsWithInsights = await Promise.all(
+          rawPosts.map((p) => enrichPost(p, accessToken))
+        );
 
-          try {
-            const insightsRes = await ApiService.getMediaInsights(post.id, accessToken, [
-              "impressions",
-              "reach",
-              "engagement",
-              "saved",
-            ]);
-            const insightsObj = {};
-            (insightsRes?.data ?? []).forEach((m) => {
-              insightsObj[m.name] = m.values?.[0]?.value ?? 0;
-            });
-            enriched.insights = insightsObj;
-          } catch {
-            enriched.insights = enriched.insights ?? {};
-          }
+        setMedia(postsWithInsights);
+        Alert.alert("Success", `Fetched ${postsWithInsights.length} posts (page).`);
+      } else {
+        // Fallback: existing getMedia (non-paged) - keep previous behavior
+        const posts = await ApiService.getMedia(accessToken, PAGE_SIZE);
+        const rawPosts = Array.isArray(posts) ? posts : posts?.data ?? [];
+        const postsWithInsights = await Promise.all(
+          rawPosts.map((p) => enrichPost(p, accessToken))
+        );
 
-          // Fetch like_count, comments_count, media_url, etc.
-          if (enriched.like_count == null || enriched.comments_count == null) {
-            try {
-              const mediaFieldsRes = await ApiService.getMediaFields(post.id, accessToken, [
-                "like_count",
-                "comments_count",
-                "permalink",
-                "media_url",
-                "media_type",
-                "caption",
-                "timestamp",
-              ]);
-              enriched = { ...enriched, ...mediaFieldsRes };
-            } catch {}
-          }
-
-          enriched.like_count = Number(enriched.like_count ?? 0);
-          enriched.comments_count = Number(enriched.comments_count ?? 0);
-
-          return enriched;
-        })
-      );
-
-      setMedia(postsWithInsights);
-      Alert.alert("Success", `Fetched ${postsWithInsights.length} posts`);
+        setMedia(postsWithInsights);
+        Alert.alert("Success", `Fetched ${postsWithInsights.length} posts.`);
+      }
     } catch (err) {
       console.error("Error in handleRefresh:", err);
       Alert.alert("Error", err.message || "Failed to fetch Instagram posts.");
@@ -133,10 +144,43 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+  // Load more pages (when user presses Load more)
+  const handleLoadMore = async () => {
+    if (!accessToken) {
+      Alert.alert("Error", "No access token found.");
+      return;
+    }
+    if (!nextPageUrl) return;
+
+    setLoadingMore(true);
+    try {
+      if (typeof ApiService.getMediaPage === "function") {
+        const page = await ApiService.getMediaPage(accessToken, PAGE_SIZE, nextPageUrl);
+        const rawPosts = page.data || [];
+        const postsWithInsights = await Promise.all(
+          rawPosts.map((p) => enrichPost(p, accessToken))
+        );
+
+        // Append new posts
+        setMedia((prev) => [...(prev || []), ...postsWithInsights]);
+        setNextPageUrl(page.next || null);
+      } else {
+        // If no paged API exists, fallback to nothing (or optionally re-run getMedia with larger limit)
+        Alert.alert("No paging API available", "Server-side paging is not configured.");
+        setNextPageUrl(null);
+      }
+    } catch (err) {
+      console.error("Error loading more:", err);
+      Alert.alert("Error", err.message || "Failed to load more posts.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   // Logout
   const handleLogout = async () => {
     try {
-      await AuthService.clearToken();
+      await AuthService.clearTokenInfo();
     } catch (e) {
       console.warn("Failed to clear token:", e);
     }
@@ -215,12 +259,25 @@ export default function HomeScreen({ navigation }) {
             <Text style={{ marginTop: 8 }}>Refreshing posts…</Text>
           </View>
         ) : (
-          <MediaList
-            media={filteredMedia}
-            onSelect={(item) =>
-              navigation.navigate("MediaDetail", { post: item })
-            }
-          />
+          <>
+            <MediaList
+              media={filteredMedia}
+              onSelect={(item) => navigation.navigate("MediaDetail", { id: item.id })}
+            />
+
+            {/* Load more button if we have a next page */}
+            {nextPageUrl ? (
+              <TouchableOpacity
+                style={[styles.loadMoreButton, loadingMore && { opacity: 0.7 }]}
+                onPress={handleLoadMore}
+                disabled={loadingMore}
+              >
+                <Text style={styles.loadMoreText}>
+                  {loadingMore ? "Loading more…" : "Load more posts"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         )}
       </View>
 
@@ -241,7 +298,12 @@ export default function HomeScreen({ navigation }) {
 
       {username ? (
         <Text
-          style={{ textAlign: "center", marginTop: 30, color: "#888", fontSize: 16 }}
+          style={{
+            textAlign: "center",
+            marginTop: 30,
+            color: "#888",
+            fontSize: 16,
+          }}
         >
           Logged in as{" "}
           <Text style={{ fontWeight: "bold", color: "#222" }}>{username}</Text>
@@ -305,6 +367,20 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 15,
     backgroundColor: "#fff",
+  },
+  loadMoreButton: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignSelf: "center",
+    marginTop: 12,
+    paddingHorizontal: 20,
+  },
+  loadMoreText: {
+    color: "#333",
+    fontWeight: "600",
   },
   refreshButton: {
     backgroundColor: "#3498db",

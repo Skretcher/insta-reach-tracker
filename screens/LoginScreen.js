@@ -1,6 +1,7 @@
 // screens/LoginScreen.js
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import LoginButton from "../components/LoginButton";
+import { getMedia } from "../services/apiService"; // optional: import if you want to fetch media here
 
 export default function LoginScreen({ setAccessToken, setMedia }) {
   // Facebook login handler (legacy — keep if you still use it)
@@ -12,8 +13,17 @@ export default function LoginScreen({ setAccessToken, setMedia }) {
   // Instagram login handler (called after successful login in LoginButton)
   const handleInstagramLogin = async (token) => {
     setAccessToken(token);
+
     // Optionally, fetch Instagram user media directly here if needed
-    // e.g. call your ApiService to populate setMedia(...)
+    // Note: token should be the access_token string
+    try {
+      if (setMedia && token) {
+        const media = await getMedia(token, 25, false); // uses new apiService getMedia(accessToken,...)
+        setMedia(media);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch media after login:", err);
+    }
   };
 
   return (
@@ -24,7 +34,7 @@ export default function LoginScreen({ setAccessToken, setMedia }) {
           Connect your account to analyze your Instagram insights
         </Text>
 
-        {/* Single Instagram login button (use the component in components/LoginButton) */}
+        {/* Pass the handler into LoginButton */}
         <LoginButton onLogin={handleInstagramLogin} />
 
         <TouchableOpacity
