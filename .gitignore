@@ -30,6 +30,8 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# local env files - DO NOT COMMIT SECRETS
+.env
 # local env files
 .env*.local
 

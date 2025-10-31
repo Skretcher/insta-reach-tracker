@@ -1,4 +1,5 @@
 // components/LoginButton.js
+import Constants from "expo-constants";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect, useState } from "react";
 import {
@@ -16,21 +17,24 @@ import {
 import { useApp } from "../app/context";
 import { AuthService } from "../services/authService";
 
-// ⚠️ Dev-only
-const INSTAGRAM_APP_ID = "1112015731097833";
-const INSTAGRAM_CLIENT_SECRET = "58e8110c5d6160e7c4501aa829a33cd4";
+const INSTAGRAM_APP_ID = Constants.expoConfig.extra.instagramAppId;
+const INSTAGRAM_CLIENT_SECRET = Constants.expoConfig.extra.instagramClientSecret;
 
 const SCOPES = [
-  "instagram_business_basic",
-  "instagram_business_content_publish",
-  "instagram_business_manage_comments",
-  "instagram_business_manage_insights",
+  // Required for fetching IG User ID via a FB Page
+  "pages_show_list",
+  "pages_read_engagement",
+  // Instagram permissions
+  "instagram_basic",
+  "instagram_manage_insights",
+  "instagram_content_publish",
+  "instagram_manage_comments",
 ];
 
 WebBrowser.maybeCompleteAuthSession();
 
 const EXPO_USERNAME = "gks2331";
-const APP_SLUG = "insta-reach-tracker";
+const APP_SLUG = "instareachtracker";
 const MANUAL_PROXY = `https://auth.expo.io/@${EXPO_USERNAME}/${APP_SLUG}`;
 
 export default function LoginButton({ onLogin }) {
@@ -91,10 +95,19 @@ export default function LoginButton({ onLogin }) {
     console.log("✅ Token info received:", tokenInfo);
 
     if (tokenInfo?.access_token) {
+      // Fetch the Instagram Business Account ID
+      const igBusinessAccountId = await getInstagramBusinessAccountId(tokenInfo.access_token);
+      console.log("✅ Instagram Business Account ID:", igBusinessAccountId);
+      // --- New Debugging Step ---
+      await debugAccessToken(tokenInfo.access_token);
+      // --------------------------
+      console.log("LoginButton: igBusinessAccountId after getInstagramBusinessAccountId:", igBusinessAccountId);
+
       await AuthService.saveTokenInfo(tokenInfo);
       setAccessToken(tokenInfo.access_token);
-      if (typeof onLogin === "function") onLogin(tokenInfo.access_token, tokenInfo);
-      setResultState({ success: true, tokenInfo });
+      if (typeof onLogin === "function")
+        onLogin(tokenInfo.access_token, igBusinessAccountId, tokenInfo);
+      setResultState({ success: true, igBusinessAccountId, tokenInfo });
     } else {
       setResultState({ error: "No access_token in token response", raw: tokenInfo });
     }
@@ -104,10 +117,17 @@ export default function LoginButton({ onLogin }) {
     setResultState(null);
     setDebugReturnedUrl(null);
 
+    // Safeguard to ensure environment variables are loaded
+    if (!INSTAGRAM_APP_ID || !INSTAGRAM_CLIENT_SECRET) {
+      const errorMessage =
+        "App ID or Client Secret is missing. Please check your .env file and restart the server with 'npx expo start -c'.";
+      console.error("❌ CONFIGURATION ERROR:", errorMessage);
+      Alert.alert("Configuration Error", errorMessage);
+      return;
+    }
+
     const scopeParam = encodeURIComponent(SCOPES.join(","));
-    const authUrl = `https://www.instagram.com/oauth/authorize?client_id=${INSTAGRAM_APP_ID}&redirect_uri=${encodeURIComponent(
-      finalRedirect
-    )}&scope=${scopeParam}&response_type=code`;
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${INSTAGRAM_APP_ID}&redirect_uri=${encodeURIComponent(finalRedirect)}&scope=${scopeParam}&response_type=code&state=123&auth_type=reauthenticate`; // state is recommended
 
     try {
       setLoading(true);
@@ -146,15 +166,25 @@ export default function LoginButton({ onLogin }) {
     }
   }
 
-  async function handleManualPaste() {
-    console.log("📋 Manual paste submitted:", manualUrl);
-    const { code, error } = parseAuthUrl(manualUrl);
-    if (error || !code) {
-      console.error("❌ Invalid manual URL, code missing");
-      Alert.alert("Error", "Invalid redirect URL or missing code.");
-      return;
+  async function handleManualPaste() {    
+    setLoading(true);
+    try {
+      console.log("📋 Manual paste submitted:", manualUrl);
+      const { code, error } = parseAuthUrl(manualUrl);
+      if (error || !code) {
+        console.error("❌ Invalid manual URL, code missing");
+        Alert.alert("Error", "Invalid redirect URL or missing code. Please paste the full URL from the browser address bar.");
+        return;
+      }
+      await exchangeAndSave(code);
+      setManualUrl(""); // Clear input on success
+    } catch (err) {
+      console.error("💥 Manual paste error:", err);
+      setResultState({ error: err.message || String(err) });
+      Alert.alert("Submission Failed", "An error occurred: " + (err.message || "Unknown error"));
+    } finally {
+      setLoading(false);
     }
-    await exchangeAndSave(code);
   }
 
   return (
@@ -180,8 +210,8 @@ export default function LoginButton({ onLogin }) {
           value={manualUrl}
           onChangeText={setManualUrl}
         />
-        <TouchableOpacity style={styles.smallButton} onPress={handleManualPaste}>
-          <Text style={styles.smallButtonText}>Submit Redirect URL</Text>
+        <TouchableOpacity style={styles.smallButton} onPress={handleManualPaste} disabled={loading}>
+          <Text style={styles.smallButtonText}>{loading ? "Submitting..." : "Submit Redirect URL"}</Text>
         </TouchableOpacity>
       </View>
 
@@ -213,7 +243,7 @@ async function exchangeCodeForToken(code, redirectUri) {
     code,
   }).toString();
 
-  const res = await fetch("https://api.instagram.com/oauth/access_token", {
+  const res = await fetch("https://graph.facebook.com/v19.0/oauth/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -231,7 +261,7 @@ async function exchangeCodeForToken(code, redirectUri) {
   try {
     console.log("🔄 Requesting long-lived token...");
     const longRes = await fetch(
-      `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${INSTAGRAM_CLIENT_SECRET}&access_token=${json.access_token}`
+      `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${INSTAGRAM_APP_ID}&client_secret=${INSTAGRAM_CLIENT_SECRET}&fb_exchange_token=${json.access_token}`
     );
     const longJson = await longRes.json();
     console.log("📦 Long-lived token response:", longJson);
@@ -248,6 +278,64 @@ async function exchangeCodeForToken(code, redirectUri) {
   }
 
   return finalTokenInfo;
+}
+
+// -------- Get Instagram Business Account ID --------
+async function getInstagramBusinessAccountId(userAccessToken) {
+  console.log("🔎 Fetching Facebook Pages connected to the user...");
+  // We ask for the instagram_business_account directly in the first call
+  const accountsUrl = `https://graph.facebook.com/v19.0/me/accounts?fields=name,instagram_business_account{id}&access_token=${userAccessToken}`;
+
+  try {
+    const accountsRes = await fetch(accountsUrl);
+    const accountsJson = await accountsRes.json();
+    console.log("📦 Facebook Pages response:", accountsJson);
+
+    if (accountsJson.error) {
+      console.error("❌ Error fetching Facebook pages:", accountsJson.error);
+      throw new Error("Failed to fetch Facebook pages: " + accountsJson.error.message);
+    }
+    
+    // Find the first page that has an instagram_business_account linked
+    const pageWithIg = accountsJson.data?.find(page => page.instagram_business_account);
+
+    if (pageWithIg) {
+      const igAccountId = pageWithIg.instagram_business_account.id;
+      console.log(`✅ Found Instagram Business Account ID: ${igAccountId} for Page "${pageWithIg.name}".`);
+      return igAccountId;
+    }
+  } catch (err) {
+    console.error("❌ Network or parsing error fetching Facebook pages:", err);
+    throw new Error("Network or parsing error fetching Facebook pages: " + err.message);
+  }
+
+  console.warn("⚠️ Loop finished: No Instagram Business Account found linked to any of the user's Facebook Pages.");
+  Alert.alert("No Instagram Account", "Could not find an Instagram Business Account connected to your Facebook Pages.");
+  return null;
+}
+
+// -------- New Debugging Function --------
+async function debugAccessToken(userAccessToken) {
+  console.log("🔬 Debugging Access Token...");
+  const debugUrl = `https://graph.facebook.com/debug_token?input_token=${userAccessToken}&access_token=${INSTAGRAM_APP_ID}|${INSTAGRAM_CLIENT_SECRET}`;
+
+  try {
+    const res = await fetch(debugUrl);
+    const json = await res.json();
+    console.log("📦 Access Token Debugger Response:", JSON.stringify(json, null, 2));
+
+    if (json.data?.error) {
+      console.error("❌ Token Debug Error:", json.data.error);
+    }
+    if (!json.data?.scopes?.includes("instagram_basic")) {
+      console.warn("⚠️ CRITICAL: Token is missing 'instagram_basic' scope!");
+    }
+    if (!json.data?.scopes?.includes("pages_show_list")) {
+      console.warn("⚠️ CRITICAL: Token is missing 'pages_show_list' scope!");
+    }
+  } catch (err) {
+    console.error("💥 Failed to debug access token:", err);
+  }
 }
 
 const styles = StyleSheet.create({

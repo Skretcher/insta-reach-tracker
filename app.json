@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "insta-reach-tracker",
-    "slug": "insta-reach-tracker",
+    "name": "instareachtracker",
+    "slug": "instareachtracker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -41,13 +41,6 @@
       ],
       "expo-web-browser",
       "expo-secure-store",
-      [
-        "react-native-fbsdk-next",
-        {
-          "appID": "1112015731097833",
-          "displayName": "instareachtracker-IG"
-        }
-      ]
     ],
     "experiments": {
       "reactCompiler": true

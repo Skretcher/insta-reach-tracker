@@ -1,422 +1,244 @@
 // screens/HomeScreen.js
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
-  ScrollView,
+  FlatList,
+  Image,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
-import { useApp } from "../app/context";
-import MediaList from "../components/MediaList";
-import * as ApiService from "../services/apiService";
+import { getMedia, getPagePosts, getUserPages } from "../api/graphAPI";
 import { AuthService } from "../services/authService";
 
-export default function HomeScreen({ navigation }) {
-  const { accessToken, setAccessToken, media, setMedia } = useApp();
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [username, setUsername] = useState("");
-  const [nextPageUrl, setNextPageUrl] = useState(null);
-  const PAGE_SIZE = 20;
+export default function HomeScreen({ route, navigation }) {
+  const { accessToken, igBusinessAccountId } = route.params || {};
+  console.log("HomeScreen: Received igBusinessAccountId from route params:", igBusinessAccountId);
+  const [media, setMedia] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [displayingFacebookPosts, setDisplayingFacebookPosts] = useState(false);
 
-  // Redirect to login if no token
+  // Fetch media on component mount
   useEffect(() => {
-    if (!accessToken) {
-      navigation.replace("Login");
+    if (igBusinessAccountId && accessToken) {
+      fetchMedia();
+    } else {
+      setLoading(false);
+      setError("Missing Instagram Business Account ID or Access Token. Please log in again.");
     }
-  }, [accessToken, navigation]);
 
-  // Auto refresh when token first appears
-  useEffect(() => {
-    if (accessToken) {
-      const t = setTimeout(() => {
-        handleRefresh().catch((e) => console.warn("Auto refresh failed", e));
-      }, 500);
-      return () => clearTimeout(t);
-    }
-  }, [accessToken]);
-
-  // Filter media by caption safely
-  const filteredMedia = useMemo(
-    () =>
-      (media || []).filter((item) =>
-        item.caption?.toLowerCase().includes(search.toLowerCase())
+    // Add a logout button to the header
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={handleLogout} style={{ marginRight: 10 }}>
+          <Text style={{ color: "#3498db", fontSize: 16 }}>Logout</Text>
+        </TouchableOpacity>
       ),
-    [media, search]
-  );
+    });
+  }, [igBusinessAccountId, accessToken, navigation]); // Added dependencies
 
-  // Helper: Enrich a single post (insights + fields)
-  const enrichPost = async (post, token) => {
-    let enriched = { ...post };
+  const handleLogout = async () => {
     try {
-      const insightsRes = await ApiService.getMediaInsights(post.id, token, [
-        "impressions",
-        "reach",
-        "engagement",
-        "saved",
-      ]);
-      const insightsObj = {};
-      (insightsRes?.data ?? []).forEach((m) => {
-        insightsObj[m.name] = m.values?.[0]?.value ?? 0;
-      });
-      enriched.insights = insightsObj;
-    } catch {
-      enriched.insights = enriched.insights ?? {};
+      await AuthService.clearTokenInfo();
+      navigation.replace("Login"); // Use replace to prevent going back to the logged-in state
+    } catch (err) {
+      console.error("Failed to logout:", err);
     }
-
-    if (enriched.like_count == null || enriched.comments_count == null) {
-      try {
-        const mediaFieldsRes = await ApiService.getMediaFields(
-          post.id,
-          token,
-          [
-            "like_count",
-            "comments_count",
-            "permalink",
-            "media_url",
-            "media_type",
-            "caption",
-            "timestamp",
-          ]
-        );
-        enriched = { ...enriched, ...mediaFieldsRes };
-      } catch {}
-    }
-
-    enriched.like_count = Number(enriched.like_count ?? 0);
-    enriched.comments_count = Number(enriched.comments_count ?? 0);
-    return enriched;
   };
 
-  // Fetch username and first page of media
-  const handleRefresh = async () => {
-    if (!accessToken) {
-      Alert.alert("Error", "No access token found.");
-      return;
-    }
-
+  const fetchMedia = async () => {
     setLoading(true);
-    setNextPageUrl(null);
+    setError(null);
     try {
-      // Profile
-      try {
-        const user = await ApiService.getUserProfile(accessToken);
-        setUsername(user.username || "");
-      } catch {
-        setUsername("");
-      }
-
-      // Try to use paged endpoint if available
-      if (typeof ApiService.getMediaPage === "function") {
-        // getMediaPage should return { data, next }
-        const page = await ApiService.getMediaPage(accessToken, PAGE_SIZE);
-        const rawPosts = page.data || [];
-        setNextPageUrl(page.next || null);
-
-        // Enrich page posts
-        const postsWithInsights = await Promise.all(
-          rawPosts.map((p) => enrichPost(p, accessToken))
-        );
-
-        setMedia(postsWithInsights);
-        Alert.alert("Success", `Fetched ${postsWithInsights.length} posts (page).`);
+      let response; // Declare response once here
+      if (igBusinessAccountId) {
+        console.log("HomeScreen: Fetching Instagram media for IG Business Account ID:", igBusinessAccountId);
+        response = await getMedia(igBusinessAccountId, accessToken);
+        const getInsightValue = (item, metricName) => {
+          return item.insights?.data?.find(insight => insight.name === metricName)?.values?.[0]?.value || 0;
+        };
+        const transformedMedia = response.data.data.map(item => ({
+          ...item,
+          // Add insights to each media item
+          reach: getInsightValue(item, 'reach'),
+          engagement: getInsightValue(item, 'engagement'),
+          impressions: getInsightValue(item, 'impressions'),
+          saved: getInsightValue(item, 'saved'),
+        }));
+        setMedia(transformedMedia || []);
+        setDisplayingFacebookPosts(false);
       } else {
-        // Fallback: existing getMedia (non-paged) - keep previous behavior
-        const posts = await ApiService.getMedia(accessToken, PAGE_SIZE);
-        const rawPosts = Array.isArray(posts) ? posts : posts?.data ?? [];
-        const postsWithInsights = await Promise.all(
-          rawPosts.map((p) => enrichPost(p, accessToken))
-        );
+        console.log("HomeScreen: No Instagram Business Account ID. Attempting to fetch Facebook Page posts instead.");
+        // First, get the user's pages to find a page ID
+        const pagesResponse = await getUserPages(accessToken);
+        const firstPage = pagesResponse.data.data?.[0];
 
-        setMedia(postsWithInsights);
-        Alert.alert("Success", `Fetched ${postsWithInsights.length} posts.`);
+        if (firstPage) {
+          console.log("HomeScreen: Found Facebook Page:", firstPage.name, "ID:", firstPage.id);
+          response = await getPagePosts(firstPage.id, accessToken);
+          // Helper to extract insight values
+          const getInsightValue = (post, metricName) => {
+            return post.insights?.data?.find(insight => insight.name === metricName)?.values?.[0]?.value || 0;
+          };
+          // Transform Facebook posts to look somewhat like Instagram media for display
+          const transformedPosts = response.data.data.map(post => ({
+            id: post.id,
+            caption: post.message || post.story || "Facebook Post",
+            media_type: "FACEBOOK_POST", // Custom type for display
+            media_url: post.full_picture,
+            thumbnail_url: post.full_picture,
+            timestamp: post.created_time,
+            permalink: post.permalink_url || `https://www.facebook.com/${post.id}`,
+            // Add insights
+            reach: getInsightValue(post, 'post_impressions_unique'),
+            engagement: getInsightValue(post, 'post_engaged_users'),
+            likes: post.likes?.summary?.total_count || 0,
+            comments: post.comments?.summary?.total_count || 0,
+          }));
+          setMedia(transformedPosts || []);
+          setDisplayingFacebookPosts(true);
+        } else {
+          setError("No Instagram Business Account ID and no Facebook Pages found.");
+        }
       }
     } catch (err) {
-      console.error("Error in handleRefresh:", err);
-      Alert.alert("Error", err.message || "Failed to fetch Instagram posts.");
+      console.error("HomeScreen: Error during fetchMedia:", err.response?.data || err.message);
+      setError("Failed to fetch data. Please try again. Error: " + (err.response?.data?.error?.message || err.message));
     } finally {
       setLoading(false);
     }
   };
 
-  // Load more pages (when user presses Load more)
-  const handleLoadMore = async () => {
-    if (!accessToken) {
-      Alert.alert("Error", "No access token found.");
-      return;
-    }
-    if (!nextPageUrl) return;
-
-    setLoadingMore(true);
-    try {
-      if (typeof ApiService.getMediaPage === "function") {
-        const page = await ApiService.getMediaPage(accessToken, PAGE_SIZE, nextPageUrl);
-        const rawPosts = page.data || [];
-        const postsWithInsights = await Promise.all(
-          rawPosts.map((p) => enrichPost(p, accessToken))
-        );
-
-        // Append new posts
-        setMedia((prev) => [...(prev || []), ...postsWithInsights]);
-        setNextPageUrl(page.next || null);
-      } else {
-        // If no paged API exists, fallback to nothing (or optionally re-run getMedia with larger limit)
-        Alert.alert("No paging API available", "Server-side paging is not configured.");
-        setNextPageUrl(null);
-      }
-    } catch (err) {
-      console.error("Error loading more:", err);
-      Alert.alert("Error", err.message || "Failed to load more posts.");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  // Logout
-  const handleLogout = async () => {
-    try {
-      await AuthService.clearTokenInfo();
-    } catch (e) {
-      console.warn("Failed to clear token:", e);
-    }
-    setAccessToken(null);
-    setMedia([]);
-  };
-
-  // Stats calculation with useMemo
-  const stats = useMemo(
-    () => ({
-      totalPosts: media?.length || 0,
-      totalLikes:
-        media?.reduce((sum, m) => sum + (Number(m.like_count) || 0), 0) || 0,
-      totalComments:
-        media?.reduce((sum, m) => sum + (Number(m.comments_count) || 0), 0) || 0,
-      totalSaved:
-        media?.reduce((sum, m) => sum + (Number(m.insights?.saved) || 0), 0) || 0,
-      totalEngagement:
-        media?.reduce((sum, m) => sum + (Number(m.insights?.engagement) || 0), 0) || 0,
-    }),
-    [media]
-  );
-
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-    >
-      <Text style={styles.header}>📊 Instagram Insights</Text>
-      <Text style={styles.welcome}>
-        Welcome back! Here's your performance overview.
-      </Text>
-
-      {/* Stats */}
-      <View style={styles.statsContainer}>
-        <View style={[styles.statCard, { backgroundColor: "#E3F2FD" }]}>
-          <Text style={styles.statIcon}>📸</Text>
-          <Text style={styles.statNumber}>{stats.totalPosts}</Text>
-          <Text style={styles.statLabel}>Posts</Text>
-        </View>
-
-        <View style={[styles.statCard, { backgroundColor: "#FCE4EC" }]}>
-          <Text style={styles.statIcon}>❤️</Text>
-          <Text style={styles.statNumber}>{stats.totalLikes}</Text>
-          <Text style={styles.statLabel}>Likes</Text>
-        </View>
-
-        <View style={[styles.statCard, { backgroundColor: "#F3E5F5" }]}>
-          <Text style={styles.statIcon}>💬</Text>
-          <Text style={styles.statNumber}>{stats.totalComments}</Text>
-          <Text style={styles.statLabel}>Comments</Text>
-        </View>
-
-        <View style={[styles.statCard, { backgroundColor: "#E8F5E8" }]}>
-          <Text style={styles.statIcon}>🔖</Text>
-          <Text style={styles.statNumber}>{stats.totalSaved}</Text>
-          <Text style={styles.statLabel}>Saved</Text>
-        </View>
-      </View>
-
-      {/* Recent Posts */}
-      <View style={styles.section}>
-        <Text style={styles.sectionHeader}>📈 Recent Posts</Text>
-
-        {/* Search bar */}
-        <TextInput
-          style={styles.searchBox}
-          placeholder="Search posts by caption..."
-          value={search}
-          onChangeText={setSearch}
-        />
-
-        {loading ? (
-          <View style={{ padding: 20, alignItems: "center" }}>
-            <ActivityIndicator size="large" />
-            <Text style={{ marginTop: 8 }}>Refreshing posts…</Text>
-          </View>
+  const renderItem = ({ item }) => (
+    <View style={styles.mediaItem}>
+      {item.thumbnail_url && (
+        <Image source={{ uri: item.thumbnail_url }} style={styles.thumbnail} />
+      )}
+      <Text style={styles.caption} numberOfLines={3}>{item.caption || "No caption"}</Text>
+      <View style={styles.insightsContainer}>
+        {displayingFacebookPosts ? (
+          <>
+          <Text style={styles.insightText}>📈 Reach: {item.reach}</Text>
+          <Text style={styles.insightText}>❤️ Likes: {item.likes}</Text>
+          <Text style={styles.insightText}>💬 Comments: {item.comments}</Text>
+          <Text style={styles.insightText}>⚡ Engagement: {item.engagement}</Text>
+          </>
         ) : (
           <>
-            <MediaList
-              media={filteredMedia}
-              onSelect={(item) => navigation.navigate("MediaDetail", { id: item.id })}
-            />
-
-            {/* Load more button if we have a next page */}
-            {nextPageUrl ? (
-              <TouchableOpacity
-                style={[styles.loadMoreButton, loadingMore && { opacity: 0.7 }]}
-                onPress={handleLoadMore}
-                disabled={loadingMore}
-              >
-                <Text style={styles.loadMoreText}>
-                  {loadingMore ? "Loading more…" : "Load more posts"}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
+            <Text style={styles.insightText}>❤️ Likes: {item.like_count}</Text>
+            <Text style={styles.insightText}>💬 Comments: {item.comments_count}</Text>
+            <Text style={styles.insightText}>📈 Reach: {item.reach}</Text>
+            <Text style={styles.insightText}>👁️ Impressions: {item.impressions}</Text>
           </>
         )}
       </View>
+    </View>
+  );
 
-      {/* Buttons */}
-      <TouchableOpacity
-        style={[styles.refreshButton, loading && { opacity: 0.7 }]}
-        onPress={handleRefresh}
-        disabled={loading}
-      >
-        <Text style={styles.refreshButtonText}>
-          {loading ? "⏳ Refreshing..." : "🔄 Refresh Data"}
-        </Text>
-      </TouchableOpacity>
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+        <Text>Loading media...</Text>
+      </View>
+    );
+  }
 
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.logoutButtonText}>🚪 Logout</Text>
-      </TouchableOpacity>
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={fetchMedia}>
+          <Text style={styles.retryText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-      {username ? (
-        <Text
-          style={{
-            textAlign: "center",
-            marginTop: 30,
-            color: "#888",
-            fontSize: 16,
-          }}
-        >
-          Logged in as{" "}
-          <Text style={{ fontWeight: "bold", color: "#222" }}>{username}</Text>
-        </Text>
-      ) : null}
-    </ScrollView>
+  return (
+    <View style={styles.container}>
+      <Text style={styles.header}>
+        {displayingFacebookPosts ? "Your Facebook Page Posts" : "Your Instagram Media"}
+      </Text>
+      <FlatList
+        data={media}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        contentContainerStyle={styles.listContainer}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8f9fa" },
-  contentContainer: { padding: 20, paddingBottom: 40 },
-  header: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#2c3e50",
-    textAlign: "center",
-    marginBottom: 10,
+  container: {
+    flex: 1,
+    backgroundColor: "#f8f9fa",
   },
-  welcome: {
-    fontSize: 16,
-    color: "#7f8c8d",
-    textAlign: "center",
-    marginBottom: 30,
-    lineHeight: 22,
-  },
-  statsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 30,
-    flexWrap: "wrap",
-  },
-  statCard: {
-    backgroundColor: "white",
-    padding: 20,
-    borderRadius: 15,
+  center: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
+  },
+  header: {
+    fontSize: 24,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginVertical: 20,
+  },
+  listContainer: {
+    padding: 20,
+  },
+  mediaItem: {
+    backgroundColor: "white",
+    padding: 15,
+    marginBottom: 10,
+    borderRadius: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
-    width: "22%",
-    minWidth: 80,
+  },
+  thumbnail: {
+    width: "100%",
+    height: 200,
+    borderRadius: 8,
     marginBottom: 10,
   },
-  statIcon: { fontSize: 24, marginBottom: 8 },
-  statNumber: { fontSize: 20, fontWeight: "bold", color: "#2c3e50" },
-  statLabel: { fontSize: 14, color: "#7f8c8d", marginTop: 5, fontWeight: "500" },
-  section: { marginBottom: 30 },
-  sectionHeader: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#34495e",
-    marginBottom: 15,
-  },
-  searchBox: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 15,
-    backgroundColor: "#fff",
-  },
-  loadMoreButton: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#ddd",
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignSelf: "center",
-    marginTop: 12,
-    paddingHorizontal: 20,
-  },
-  loadMoreText: {
+  caption: {
+    fontSize: 16,
     color: "#333",
-    fontWeight: "600",
   },
-  refreshButton: {
+  insightsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderColor: '#eee',
+  },
+  insightText: {
+    fontSize: 14,
+    color: '#555',
+  },
+  errorText: {
+    fontSize: 18,
+    color: "red",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  retryButton: {
     backgroundColor: "#3498db",
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 25,
-    alignSelf: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
   },
-  refreshButtonText: {
+  retryText: {
     color: "white",
     fontSize: 16,
     fontWeight: "bold",
-    textAlign: "center",
-  },
-  logoutButton: {
-    backgroundColor: "#e74c3c",
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 25,
-    alignSelf: "center",
-    marginTop: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 6,
-  },
-  logoutButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "bold",
-    textAlign: "center",
   },
 });
