@@ -19,14 +19,17 @@ export default function HomeScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [displayingFacebookPosts, setDisplayingFacebookPosts] = useState(false);
+  const [platform, setPlatform] = useState('instagram'); // 'instagram' or 'facebook'
+  const [pages, setPages] = useState([]);
 
-  // Fetch media on component mount
+  // Fetch media and pages on component mount
   useEffect(() => {
-    if (igBusinessAccountId && accessToken) {
+    if (accessToken) {
+      fetchPages();
       fetchMedia();
     } else {
       setLoading(false);
-      setError("Missing Instagram Business Account ID or Access Token. Please log in again.");
+      setError("Missing Access Token. Please log in again.");
     }
 
     // Add a logout button to the header
@@ -37,7 +40,7 @@ export default function HomeScreen({ route, navigation }) {
         </TouchableOpacity>
       ),
     });
-  }, [igBusinessAccountId, accessToken, navigation]); // Added dependencies
+  }, [accessToken, navigation]); // Added dependencies
 
   const handleLogout = async () => {
     try {
@@ -48,12 +51,21 @@ export default function HomeScreen({ route, navigation }) {
     }
   };
 
-  const fetchMedia = async () => {
+  const fetchPages = async () => {
+    try {
+      const pagesResponse = await getUserPages(accessToken);
+      setPages(pagesResponse.data.data || []);
+    } catch (err) {
+      console.error("Failed to fetch pages:", err);
+    }
+  };
+
+  const fetchMedia = async (selectedPlatform = platform) => {
     setLoading(true);
     setError(null);
     try {
-      let response; // Declare response once here
-      if (igBusinessAccountId) {
+      let response;
+      if (selectedPlatform === 'instagram' && igBusinessAccountId) {
         console.log("HomeScreen: Fetching Instagram media for IG Business Account ID:", igBusinessAccountId);
         response = await getMedia(igBusinessAccountId, accessToken);
         const getInsightValue = (item, metricName) => {
@@ -69,39 +81,32 @@ export default function HomeScreen({ route, navigation }) {
         }));
         setMedia(transformedMedia || []);
         setDisplayingFacebookPosts(false);
+      } else if (selectedPlatform === 'facebook' && pages.length > 0) {
+        console.log("HomeScreen: Fetching Facebook Page posts for page:", pages[0].name, "ID:", pages[0].id);
+        response = await getPagePosts(pages[0].id, accessToken);
+        // Helper to extract insight values
+        const getInsightValue = (post, metricName) => {
+          return post.insights?.data?.find(insight => insight.name === metricName)?.values?.[0]?.value || 0;
+        };
+        // Transform Facebook posts to look somewhat like Instagram media for display
+        const transformedPosts = response.data.data.map(post => ({
+          id: post.id,
+          caption: post.message || post.story || "Facebook Post",
+          media_type: "FACEBOOK_POST", // Custom type for display
+          media_url: post.full_picture,
+          thumbnail_url: post.full_picture,
+          timestamp: post.created_time,
+          permalink: post.permalink_url || `https://www.facebook.com/${post.id}`,
+          // Add insights
+          reach: getInsightValue(post, 'post_impressions_unique'),
+          engagement: getInsightValue(post, 'post_engaged_users'),
+          likes: post.likes?.summary?.total_count || 0,
+          comments: post.comments?.summary?.total_count || 0,
+        }));
+        setMedia(transformedPosts || []);
+        setDisplayingFacebookPosts(true);
       } else {
-        console.log("HomeScreen: No Instagram Business Account ID. Attempting to fetch Facebook Page posts instead.");
-        // First, get the user's pages to find a page ID
-        const pagesResponse = await getUserPages(accessToken);
-        const firstPage = pagesResponse.data.data?.[0];
-
-        if (firstPage) {
-          console.log("HomeScreen: Found Facebook Page:", firstPage.name, "ID:", firstPage.id);
-          response = await getPagePosts(firstPage.id, accessToken);
-          // Helper to extract insight values
-          const getInsightValue = (post, metricName) => {
-            return post.insights?.data?.find(insight => insight.name === metricName)?.values?.[0]?.value || 0;
-          };
-          // Transform Facebook posts to look somewhat like Instagram media for display
-          const transformedPosts = response.data.data.map(post => ({
-            id: post.id,
-            caption: post.message || post.story || "Facebook Post",
-            media_type: "FACEBOOK_POST", // Custom type for display
-            media_url: post.full_picture,
-            thumbnail_url: post.full_picture,
-            timestamp: post.created_time,
-            permalink: post.permalink_url || `https://www.facebook.com/${post.id}`,
-            // Add insights
-            reach: getInsightValue(post, 'post_impressions_unique'),
-            engagement: getInsightValue(post, 'post_engaged_users'),
-            likes: post.likes?.summary?.total_count || 0,
-            comments: post.comments?.summary?.total_count || 0,
-          }));
-          setMedia(transformedPosts || []);
-          setDisplayingFacebookPosts(true);
-        } else {
-          setError("No Instagram Business Account ID and no Facebook Pages found.");
-        }
+        setError(`No ${selectedPlatform === 'instagram' ? 'Instagram Business Account' : 'Facebook Pages'} found.`);
       }
     } catch (err) {
       console.error("HomeScreen: Error during fetchMedia:", err.response?.data || err.message);
@@ -111,6 +116,11 @@ export default function HomeScreen({ route, navigation }) {
     }
   };
 
+  const handlePlatformSwitch = (newPlatform) => {
+    setPlatform(newPlatform);
+    fetchMedia(newPlatform);
+  };
+
   const renderItem = ({ item }) => (
     <View style={styles.mediaItem}>
       {item.thumbnail_url && (
@@ -118,7 +128,7 @@ export default function HomeScreen({ route, navigation }) {
       )}
       <Text style={styles.caption} numberOfLines={3}>{item.caption || "No caption"}</Text>
       <View style={styles.insightsContainer}>
-        {displayingFacebookPosts ? (
+        {platform === 'facebook' ? (
           <>
           <Text style={styles.insightText}>📈 Reach: {item.reach}</Text>
           <Text style={styles.insightText}>❤️ Likes: {item.likes}</Text>
@@ -148,11 +158,30 @@ export default function HomeScreen({ route, navigation }) {
 
   if (error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={fetchMedia}>
-          <Text style={styles.retryText}>Retry</Text>
-        </TouchableOpacity>
+      <View style={styles.container}>
+        <Text style={styles.header}>
+          {platform === 'facebook' ? "Your Facebook Page Posts" : "Your Instagram Media"}
+        </Text>
+        <View style={styles.toggleContainer}>
+          <TouchableOpacity
+            style={[styles.toggleButton, platform === 'instagram' && styles.activeToggle]}
+            onPress={() => handlePlatformSwitch('instagram')}
+          >
+            <Text style={[styles.toggleText, platform === 'instagram' && styles.activeToggleText]}>Instagram</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleButton, platform === 'facebook' && styles.activeToggle]}
+            onPress={() => handlePlatformSwitch('facebook')}
+          >
+            <Text style={[styles.toggleText, platform === 'facebook' && styles.activeToggleText]}>Facebook</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.center}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchMedia}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -160,8 +189,22 @@ export default function HomeScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <Text style={styles.header}>
-        {displayingFacebookPosts ? "Your Facebook Page Posts" : "Your Instagram Media"}
+        {platform === 'facebook' ? "Your Facebook Page Posts" : "Your Instagram Media"}
       </Text>
+      <View style={styles.toggleContainer}>
+        <TouchableOpacity
+          style={[styles.toggleButton, platform === 'instagram' && styles.activeToggle]}
+          onPress={() => handlePlatformSwitch('instagram')}
+        >
+          <Text style={[styles.toggleText, platform === 'instagram' && styles.activeToggleText]}>Instagram</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.toggleButton, platform === 'facebook' && styles.activeToggle]}
+          onPress={() => handlePlatformSwitch('facebook')}
+        >
+          <Text style={[styles.toggleText, platform === 'facebook' && styles.activeToggleText]}>Facebook</Text>
+        </TouchableOpacity>
+      </View>
       <FlatList
         data={media}
         keyExtractor={(item) => item.id}
@@ -240,5 +283,29 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  toggleContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginVertical: 10,
+  },
+  toggleButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    marginHorizontal: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#3498db',
+    backgroundColor: 'white',
+  },
+  activeToggle: {
+    backgroundColor: '#3498db',
+  },
+  toggleText: {
+    fontSize: 16,
+    color: '#3498db',
+  },
+  activeToggleText: {
+    color: 'white',
   },
 });
