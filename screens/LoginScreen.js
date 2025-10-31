@@ -1,7 +1,6 @@
 // screens/LoginScreen.js
 import { useState } from "react";
-import { ActivityIndicator, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { TextInput } from "react-native-gesture-handler";
+import { ActivityIndicator, Linking, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useAuth } from "../hooks/useAuth";
 
 export default function LoginScreen({ navigation }) {
